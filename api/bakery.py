@@ -187,9 +187,8 @@ class handler(BaseHTTPRequestHandler):
             self._respond(403, "Forbidden")
             return
 
-        # Acknowledge Slack immediately (must reply within 3 seconds)
-        self._respond(200, json.dumps({"response_type": "in_channel", "text": "⏳ Working on it..."}),
-                      content_type="application/json")
+        # Acknowledge Slack immediately with empty 200 (no visible message)
+        self._respond(200, "")
 
         params = parse_qs(raw_body.decode("utf-8"))
         get = lambda k: params.get(k, [""])[0].strip()
@@ -266,8 +265,25 @@ class handler(BaseHTTPRequestHandler):
             _post_response(response_url, _search_blocks(arg, matches), f"Search: {arg}")
             return
 
-        # ── help / fallback ───────────────────────────────────────────────────
-        _post_response(response_url, _help_blocks(), "Bakery Bot Help")
+        # ── unknown command ───────────────────────────────────────────────────
+        elif sub:
+            _post_response(response_url, [
+                _header_block("❓ Unknown Command"),
+                _section(
+                    f"*`/bakery {sub}`* isn't a valid command.\n\n"
+                    "*Available commands:*\n"
+                    "• `/bakery product [name]` — look up a product\n"
+                    "• `/bakery category [name]` — browse a category\n"
+                    "• `/bakery list` — see all categories\n"
+                    "• `/bakery search [keyword]` — search all products\n"
+                    "• `/bakery sync` — refresh data _(admins only)_\n\n"
+                    "_Need help? Type `/bakery` with no arguments._"
+                ),
+            ], f"Unknown command: {sub}")
+
+        # ── no command (just /bakery) ─────────────────────────────────────────
+        else:
+            _post_response(response_url, _help_blocks(), "Bakery Bot Help")
 
     def _respond(self, status, body, content_type="text/plain"):
         self.send_response(status)

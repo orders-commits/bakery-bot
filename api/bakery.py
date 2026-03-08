@@ -108,6 +108,42 @@ def _fuzzy_search(rows, query):
                 matches.append(r)
     return matches
 
+def _edit_distance(a, b):
+    """Standard Levenshtein distance between two strings."""
+    a, b = a.lower(), b.lower()
+    dp = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, dp[0] = dp[0], i
+        for j, cb in enumerate(b, 1):
+            prev, dp[j] = dp[j], prev if ca == cb else 1 + min(prev, dp[j], dp[j - 1])
+    return dp[-1]
+
+def _best_match(rows, query):
+    """Return the single closest product name and its rows, or (None, []) if too far."""
+    q = query.lower().strip()
+    seen_names = {}
+    for r in rows:
+        name = r["product"]
+        if name not in seen_names:
+            seen_names[name] = []
+        seen_names[name].append(r)
+
+    best_name, best_dist = None, float("inf")
+    for name in seen_names:
+        dist = _edit_distance(q, name.lower())
+        # Reward partial containment to handle short/abbreviated queries
+        if q in name.lower():
+            dist = max(0, dist - 5)
+        if dist < best_dist:
+            best_dist = dist
+            best_name = name
+
+    # Only suggest if close enough (within 40% of the longer string length)
+    threshold = max(6, int(len(max(q, best_name or "", key=len)) * 0.4))
+    if best_name and best_dist <= threshold:
+        return best_name, seen_names[best_name]
+    return None, []
+
 # ── Block builders ─────────────────────────────────────────────────────────────
 def _product_blocks(product_name, rows):
     if not rows:
@@ -237,12 +273,24 @@ class handler(BaseHTTPRequestHandler):
                 return
             matched = _rows_for_product(rows, arg)
             if not matched:
-                fuzzy = _fuzzy_search(rows, arg)
-                if fuzzy:
-                    blocks = [_section(f"_No exact match for \"{arg}\" — showing search results:_")] + _search_blocks(arg, fuzzy)
-                    _post_response(response_url, blocks, f"Search results for {arg}")
+                # Try "did you mean?" using closest edit distance match
+                best_name, best_rows = _best_match(rows, arg)
+                if best_name:
+                    sub_label = f"  ›  {best_rows[0]['subcategory']}" if best_rows[0]["subcategory"] else ""
+                    lines = [f"• `{r['lead_time']}`  →  {r['min_quantity']}" for r in best_rows]
+                    blocks = [
+                        _section(f"🤔 No exact match for *\"{arg}\"*. Did you mean *{best_name}*?"),
+                        _divider(),
+                        _header_block(f"🎂 {best_name}"),
+                        _section(f"*Category:* {best_rows[0]['category']}{sub_label}"),
+                        _divider(),
+                        _section("*Lead Time*  |  *Min Quantity*\n" + "\n".join(lines)),
+                    ]
+                    _post_response(response_url, blocks, f"Did you mean: {best_name}?")
                 else:
-                    _post_response(response_url, _product_blocks(arg, []), "Not found")
+                    _post_response(response_url, [
+                        _section(f"❌ No product found matching *\"{arg}\"* and no close matches either.\nTry `/bakery search {arg}` or `/bakery list` to browse categories.")
+                    ], "Not found")
             else:
                 _post_response(response_url, _product_blocks(arg, matched), matched[0]["product"])
             return
